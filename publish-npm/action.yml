@@ -32,9 +32,20 @@ inputs:
     required: false
     default: ''
   access:
-    description: 'Value passed to `pnpm publish --access`.'
+    description: >-
+      Value passed to `pnpm publish --access` (e.g. "public" or "restricted").
+      Empty (default) omits the flag so the package keeps its existing access —
+      the correct choice for private @knockaway packages. Do NOT set "public"
+      for a private package.
     required: false
-    default: 'public'
+    default: ''
+  provenance:
+    description: >-
+      When "true", publishes with `--provenance` (Sigstore attestation). Only
+      works for PUBLIC packages built in CI with `id-token: write`; leave "false"
+      for private packages.
+    required: false
+    default: 'false'
 
 runs:
   using: 'composite'
@@ -130,5 +141,12 @@ runs:
           echo "${pkg}@${version} is already published; nothing to do."
           exit 0
         fi
+        args=(--no-git-checks --tag "${{ steps.derive.outputs.tag }}")
+        if [ -n "${{ inputs.access }}" ]; then
+          args+=(--access "${{ inputs.access }}")
+        fi
+        if [ "${{ inputs.provenance }}" = "true" ]; then
+          args+=(--provenance)
+        fi
         echo "Publishing ${pkg}@${version} (dist-tag: ${{ steps.derive.outputs.tag }})…"
-        pnpm publish --no-git-checks --access "${{ inputs.access }}" --tag "${{ steps.derive.outputs.tag }}"
+        pnpm publish "${args[@]}"

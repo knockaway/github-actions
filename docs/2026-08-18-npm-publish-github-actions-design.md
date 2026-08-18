@@ -104,8 +104,10 @@ Separation of concerns:
    - otherwise (push to non-main) → `base = <package.json version>`; `version = ${base}-beta.${short_sha}`;
      `dist-tag = beta`. `short_sha = ${GITHUB_SHA::7}`.
 7. `pnpm version --no-git-tag-version "$version"` in `working-directory`.
-8. `pnpm publish --no-git-checks --access "$access" --tag "$dist-tag"` in `working-directory`,
-   with `env: NODE_AUTH_TOKEN: ${{ inputs.npm-token }}`.
+8. `pnpm publish --no-git-checks --tag "$dist-tag"` in `working-directory`, with
+   `env: NODE_AUTH_TOKEN: ${{ inputs.npm-token }}`. `--access` is added only when the
+   `access` input is non-empty (default omits it so private packages stay restricted);
+   `--provenance` is added only when `provenance: 'true'` (public packages only).
 
 **Idempotency:** before publishing, the action checks `npm view "$pkg@$version"` and **skips** (success, with a
 log line) if that exact version already exists — so re-running a job on the same sha won't hard-fail.
@@ -118,7 +120,7 @@ on:
   release:
     types: [published]
   push:
-    branches-ignore: [main, 'prod*']
+    branches-ignore: [main, 'prod*', 'dependabot/**']
     paths: ['sdk/**']
 concurrency:
   group: publish-sdk-${{ github.ref }}
@@ -170,8 +172,13 @@ The two repos are identical except the (implicit) package under `sdk/`.
 - **Two branches, same base version:** both produce distinct `-beta.<sha>` versions; both land on the `beta`
   tag, last-writer-wins for the tag pointer. Acceptable; documented. (A future per-branch dist-tag option is
   possible but out of scope.)
-- **Scoped first publish / access:** `--access public` is passed explicitly; both packages already exist as
-  public so this is a no-op safety net.
+- **Package access:** `@knockaway/*` packages are **private** on npmjs.org (they 404 unauthenticated, npm's
+  signal for a private scoped package). The action therefore **omits `--access`** by default so a private
+  package stays restricted. Setting `access: public` on a private package would flip it public and leak
+  source — never do this.
+- **Dependabot / fork pushes:** these run without access to `NPM_TOKEN`, so a beta publish would fail. The
+  caller's `branches-ignore` includes `dependabot/**`; forked-PR pushes don't carry secrets and are excluded
+  by the same branch model.
 - **`.nvmrc` with `v` prefix** (jupiter `v24`): `actions/setup-node` accepts it.
 
 ## 10. Rollout plan
@@ -192,7 +199,20 @@ The two repos are identical except the (implicit) package under `sdk/`.
 - **No-op safety:** re-run the same job → skip log, no error, npm unchanged.
 - **Paths filter:** push a branch changing only service `src/**` → no publish run.
 
-## 12. Open questions
+## 12. Provenance & supply-chain
+
+- **npm provenance** (Sigstore attestations via `--provenance` + OIDC `id-token: write`) and **trusted
+  publishing** (OIDC, tokenless) are **public-package features**. `@knockaway/*` packages are private, so
+  neither applies today. The action ships a dormant `provenance` input (default `false`) and the caller keeps
+  `id-token: write`, so enabling it is a one-line change if a package is ever published publicly.
+- **Token hygiene (the actual security lever for private packages):** use a least-privilege **automation** or
+  **granular** npm token scoped to only the `@knockaway` packages that need publishing, stored as the org
+  `NPM_TOKEN` secret with per-repo access grants. Automation/granular tokens bypass npm 2FA (required for CI)
+  and can be rotated centrally.
+- **No token in source:** the token only ever exists as a GitHub secret injected into `NODE_AUTH_TOKEN`; it is
+  never written to a committed `.npmrc`.
+
+## 13. Open questions
 
 - Confirm org `NPM_TOKEN` is an **automation** token with `@knockaway` publish rights (not a personal token).
 - Should the SDK version in `sdk/package.json` be committed back after a stable Release, or is the Release tag

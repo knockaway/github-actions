@@ -29,7 +29,8 @@ publish step is skipped instead of failing.
 | `npm-token` | **yes** | — | npm automation token with publish rights to the package scope. |
 | `dist-tag` | no | *(derived)* | Override the derived dist-tag. |
 | `version` | no | *(derived)* | Override the derived version. |
-| `access` | no | `public` | Value passed to `pnpm publish --access`. |
+| `access` | no | `''` | `pnpm publish --access` value. **Empty keeps the package's existing access** — correct for private `@knockaway` packages. Do **not** set `public` on a private package. |
+| `provenance` | no | `'false'` | Publish with `--provenance` (Sigstore). **Public packages only**; leave `false` for private packages. |
 
 ### Usage
 
@@ -41,7 +42,7 @@ on:
   release:
     types: [published]
   push:
-    branches-ignore: [main, 'prod*']
+    branches-ignore: [main, 'prod*', 'dependabot/**']
     paths: ['sdk/**']
 concurrency:
   group: publish-sdk-${{ github.ref }}
@@ -68,8 +69,14 @@ For a package at the repo root, drop `working-directory` and the `paths:` filter
   artifact is a subpackage (e.g. `temporal-worker`, `jupiter`), the release tag
   is the **SDK's** semver, not the service version.
 - The org **`NPM_TOKEN`** secret must have repository access granted to each
-  consuming repo, and be an **automation** token with publish rights to the
-  package scope.
+  consuming repo, and be a least-privilege **automation** (or granular) token
+  with publish rights to the package scope. Automation tokens also bypass npm
+  2FA, which CI requires.
+- **These are private packages.** `@knockaway/*` packages are published private
+  to npmjs.org, so `--access` is left unset (keeps them restricted) and
+  **provenance / trusted publishing do not apply** (both are public-only). If a
+  package is ever made public, set `provenance: 'true'` and keep the caller's
+  `id-token: write` permission.
 
 ## Design
 
