@@ -1,0 +1,134 @@
+name: 'Publish npm package'
+description: >-
+  Build and publish a @knockaway npm package to npmjs.org. Publishes a stable
+  release (dist-tag `latest`) when invoked from a GitHub Release, and a
+  prerelease (dist-tag `beta`, version `<base>-beta.<short-sha>`) otherwise.
+branding:
+  icon: 'package'
+  color: 'purple'
+
+inputs:
+  working-directory:
+    description: 'Directory containing the package.json to publish (e.g. "sdk").'
+    required: false
+    default: '.'
+  node-version:
+    description: 'Explicit Node version. When empty, node-version-file is used.'
+    required: false
+    default: ''
+  node-version-file:
+    description: 'Repo-root file to read the Node version from when node-version is empty.'
+    required: false
+    default: '.nvmrc'
+  npm-token:
+    description: 'npm automation token with publish rights to the package scope.'
+    required: true
+  dist-tag:
+    description: 'Override the derived dist-tag (latest for releases, beta otherwise).'
+    required: false
+    default: ''
+  version:
+    description: 'Override the derived version to publish.'
+    required: false
+    default: ''
+  access:
+    description: 'Value passed to `pnpm publish --access`.'
+    required: false
+    default: 'public'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure git identity
+      shell: bash
+      run: |
+        git config user.name "${{ github.actor }}"
+        git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        node-version-file: ${{ inputs.node-version == '' && inputs.node-version-file || '' }}
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: pnpm install
+
+    - name: Build (if a build script exists)
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        if node -e "process.exit(require('./package.json').scripts?.build ? 0 : 1)"; then
+          echo "Running build…"
+          pnpm run build
+        else
+          echo "No build script found; skipping."
+        fi
+
+    - name: Derive version and dist-tag
+      id: derive
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        RELEASE_TAG: ${{ github.event.release.tag_name }}
+        FULL_SHA: ${{ github.sha }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_DIST_TAG: ${{ inputs.dist-tag }}
+      run: |
+        set -euo pipefail
+        base="$(node -p "require('./package.json').version")"
+
+        if [ -n "${INPUT_VERSION}" ]; then
+          version="${INPUT_VERSION}"
+        elif [ "${EVENT_NAME}" = "release" ]; then
+          # GitHub Release tag is the SDK semver; strip an optional leading "v".
+          version="${RELEASE_TAG#v}"
+        else
+          version="${base}-beta.${FULL_SHA:0:7}"
+        fi
+
+        if [ -n "${INPUT_DIST_TAG}" ]; then
+          tag="${INPUT_DIST_TAG}"
+        elif [ "${EVENT_NAME}" = "release" ]; then
+          tag="latest"
+        else
+          tag="beta"
+        fi
+
+        if [ -z "${version}" ]; then
+          echo "::error::Could not derive a version (event=${EVENT_NAME}, tag=${RELEASE_TAG})."
+          exit 1
+        fi
+
+        echo "version=${version}" >> "${GITHUB_OUTPUT}"
+        echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+        echo "Resolved: version=${version} dist-tag=${tag}"
+
+    - name: Set package version
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: pnpm version --no-git-tag-version --allow-same-version "${{ steps.derive.outputs.version }}"
+
+    - name: Publish to npm
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
+      run: |
+        set -euo pipefail
+        pkg="$(node -p "require('./package.json').name")"
+        version="${{ steps.derive.outputs.version }}"
+        if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
+          echo "${pkg}@${version} is already published; nothing to do."
+          exit 0
+        fi
+        echo "Publishing ${pkg}@${version} (dist-tag: ${{ steps.derive.outputs.tag }})…"
+        pnpm publish --no-git-checks --access "${{ inputs.access }}" --tag "${{ steps.derive.outputs.tag }}"
