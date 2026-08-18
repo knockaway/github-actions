@@ -12,6 +12,14 @@ inputs:
     description: 'Directory containing the package.json to publish (e.g. "sdk").'
     required: false
     default: '.'
+  install-directory:
+    description: >-
+      Directory to run `pnpm install` in. Defaults to working-directory. Set to
+      the repo root (".") when the package's build reaches into sibling source
+      (e.g. an sdk/ that imports ../src) and therefore needs the parent repo's
+      dependencies hydrated.
+    required: false
+    default: ''
   node-version:
     description: 'Explicit Node version. When empty, node-version-file is used.'
     required: false
@@ -81,8 +89,12 @@ runs:
 
     - name: Install dependencies
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
-      run: pnpm install
+      working-directory: ${{ inputs.install-directory != '' && inputs.install-directory || inputs.working-directory }}
+      env:
+        # Tolerate an install dir that pins a different pnpm than the package
+        # being published (e.g. a pnpm-9 service root + a pnpm-10 sdk).
+        NPM_CONFIG_PACKAGE_MANAGER_STRICT: 'false'
+      run: pnpm install --no-frozen-lockfile
 
     - name: Build (if a build script exists)
       shell: bash
