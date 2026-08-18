@@ -46,6 +46,14 @@ inputs:
       for private packages.
     required: false
     default: 'false'
+  pnpm-version:
+    description: >-
+      Explicit pnpm version for pnpm/action-setup. When empty, the version is
+      read from the published package's own package.json `packageManager` field
+      (i.e. `<working-directory>/package.json`), so each package controls its own
+      pnpm. Set this only to override that.
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -58,6 +66,11 @@ runs:
 
     - name: Setup pnpm
       uses: pnpm/action-setup@v4
+      with:
+        version: ${{ inputs.pnpm-version }}
+        # Read the pnpm version from the package being published, not the repo
+        # root — a subpackage (e.g. sdk/) may pin a different pnpm than the service.
+        package_json_file: ${{ inputs.working-directory }}/package.json
 
     - name: Setup Node
       uses: actions/setup-node@v4
