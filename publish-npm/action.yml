@@ -158,36 +158,48 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: pnpm version --no-git-tag-version --allow-same-version "${{ steps.derive.outputs.version }}"
 
-    - name: Publish to npm
+    - name: Skip if version already published
+      id: existing
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        pkg="$(node -p "require('./package.json').name")"
+        version="${{ steps.derive.outputs.version }}"
+        if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
+          echo "already=true" >> "${GITHUB_OUTPUT}"
+          echo "${pkg}@${version} is already published; nothing to do."
+        else
+          echo "already=false" >> "${GITHUB_OUTPUT}"
+        fi
+
+    # Token auth (pnpm). Runs only when an npm-token is supplied.
+    - name: Publish (token)
+      if: ${{ inputs.npm-token != '' && steps.existing.outputs.already == 'false' }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
         NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
       run: |
         set -euo pipefail
-        pkg="$(node -p "require('./package.json').name")"
-        version="${{ steps.derive.outputs.version }}"
-        tag="${{ steps.derive.outputs.tag }}"
-        if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
-          echo "${pkg}@${version} is already published; nothing to do."
-          exit 0
-        fi
+        args=(--no-git-checks --tag "${{ steps.derive.outputs.tag }}")
+        [ -n "${{ inputs.access }}" ] && args+=(--access "${{ inputs.access }}")
+        [ "${{ inputs.provenance }}" = "true" ] && args+=(--provenance)
+        echo "Publishing via pnpm + token…"
+        pnpm publish "${args[@]}"
 
-        if [ -n "${{ inputs.npm-token }}" ]; then
-          # --- Token auth (pnpm publish) ---
-          args=(--no-git-checks --tag "${tag}")
-          [ -n "${{ inputs.access }}" ] && args+=(--access "${{ inputs.access }}")
-          [ "${{ inputs.provenance }}" = "true" ] && args+=(--provenance)
-          echo "Publishing ${pkg}@${version} (dist-tag: ${tag}) via pnpm + token…"
-          pnpm publish "${args[@]}"
-        else
-          # --- Trusted publishing (OIDC, tokenless) ---
-          # Requires the caller's `id-token: write` and a trusted publisher
-          # configured on the package. npm's OIDC support needs npm >= 11.5.1,
-          # newer than the CLI bundled with Node, so upgrade it first.
-          echo "Publishing ${pkg}@${version} (dist-tag: ${tag}) via npm trusted publishing (OIDC)…"
-          npm install -g npm@latest
-          args=(--tag "${tag}")
-          [ -n "${{ inputs.access }}" ] && args+=(--access "${{ inputs.access }}")
-          npm publish "${args[@]}"
-        fi
+    # Trusted publishing (OIDC, tokenless). No NODE_AUTH_TOKEN is set here — an
+    # empty token env can stop npm from attempting the OIDC exchange. Requires
+    # the caller's `id-token: write`, a configured trusted publisher, and npm
+    # >= 11.5.1 (newer than the CLI bundled with Node, so upgrade first).
+    - name: Publish (OIDC trusted publishing)
+      if: ${{ inputs.npm-token == '' && steps.existing.outputs.already == 'false' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        npm install -g npm@latest
+        args=(--tag "${{ steps.derive.outputs.tag }}")
+        [ -n "${{ inputs.access }}" ] && args+=(--access "${{ inputs.access }}")
+        echo "Publishing via npm trusted publishing (OIDC)…"
+        npm publish "${args[@]}"
