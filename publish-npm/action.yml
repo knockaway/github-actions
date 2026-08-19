@@ -29,8 +29,13 @@ inputs:
     required: false
     default: '.nvmrc'
   npm-token:
-    description: 'npm automation token with publish rights to the package scope.'
-    required: true
+    description: >-
+      npm automation/granular token with publish rights to the package scope.
+      Leave empty to publish via npm **trusted publishing** (OIDC) instead — the
+      caller must set `permissions: id-token: write` and a trusted publisher must
+      be configured for the package on npmjs.org.
+    required: false
+    default: ''
   dist-tag:
     description: 'Override the derived dist-tag (latest for releases, beta otherwise).'
     required: false
@@ -162,16 +167,27 @@ runs:
         set -euo pipefail
         pkg="$(node -p "require('./package.json').name")"
         version="${{ steps.derive.outputs.version }}"
+        tag="${{ steps.derive.outputs.tag }}"
         if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
           echo "${pkg}@${version} is already published; nothing to do."
           exit 0
         fi
-        args=(--no-git-checks --tag "${{ steps.derive.outputs.tag }}")
-        if [ -n "${{ inputs.access }}" ]; then
-          args+=(--access "${{ inputs.access }}")
+
+        if [ -n "${{ inputs.npm-token }}" ]; then
+          # --- Token auth (pnpm publish) ---
+          args=(--no-git-checks --tag "${tag}")
+          [ -n "${{ inputs.access }}" ] && args+=(--access "${{ inputs.access }}")
+          [ "${{ inputs.provenance }}" = "true" ] && args+=(--provenance)
+          echo "Publishing ${pkg}@${version} (dist-tag: ${tag}) via pnpm + token…"
+          pnpm publish "${args[@]}"
+        else
+          # --- Trusted publishing (OIDC, tokenless) ---
+          # Requires the caller's `id-token: write` and a trusted publisher
+          # configured on the package. npm's OIDC support needs npm >= 11.5.1,
+          # newer than the CLI bundled with Node, so upgrade it first.
+          echo "Publishing ${pkg}@${version} (dist-tag: ${tag}) via npm trusted publishing (OIDC)…"
+          npm install -g npm@latest
+          args=(--tag "${tag}")
+          [ -n "${{ inputs.access }}" ] && args+=(--access "${{ inputs.access }}")
+          npm publish "${args[@]}"
         fi
-        if [ "${{ inputs.provenance }}" = "true" ]; then
-          args+=(--provenance)
-        fi
-        echo "Publishing ${pkg}@${version} (dist-tag: ${{ steps.derive.outputs.tag }})…"
-        pnpm publish "${args[@]}"
