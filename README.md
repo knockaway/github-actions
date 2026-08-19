@@ -26,7 +26,7 @@ publish step is skipped instead of failing.
 | `working-directory` | no | `.` | Directory containing the `package.json` to publish (e.g. `sdk`). |
 | `node-version` | no | `''` | Explicit Node version. When empty, `node-version-file` is used. |
 | `node-version-file` | no | `.nvmrc` | Repo-root file read for the Node version when `node-version` is empty. |
-| `npm-token` | no | `''` | npm token with publish rights. **Leave empty to publish via npm trusted publishing (OIDC)** — the caller then needs `permissions: id-token: write` and a trusted publisher configured on the package. |
+| `npm-token` | no | `''` | npm token with publish rights, used as a **fallback** when OIDC is unavailable or fails. Omit for OIDC-only. |
 | `dist-tag` | no | *(derived)* | Override the derived dist-tag. |
 | `version` | no | *(derived)* | Override the derived version. |
 | `access` | no | `''` | `pnpm publish --access` value. **Empty keeps the package's existing access** — correct for private `@knockaway` packages. Do **not** set `public` on a private package. |
@@ -63,21 +63,29 @@ jobs:
 
 For a package at the repo root, drop `working-directory` and the `paths:` filter.
 
-#### Trusted publishing (OIDC, tokenless)
+#### Auth: OIDC-preferred with token fallback
 
-Omit `npm-token` to authenticate via npm trusted publishing. The caller must
-grant `id-token: write` (already shown above) and a trusted publisher must be
-configured for the package on npmjs.org (Repository → **one** workflow filename;
-npm allows a single trusted publisher per package, so publish that package from
-**one** workflow file). npm auto-generates provenance under trusted publishing,
-which is a **public-package** feature — verify it works for private packages
-before relying on it.
+The Publish step picks its auth automatically:
+
+| `id-token: write`? | `npm-token`? | Behavior |
+|---|---|---|
+| yes | yes | Try **OIDC** trusted publishing; on failure fall back to the token |
+| yes | no | OIDC only |
+| no | yes | Token only |
+| no | no | Error |
+
+For OIDC, a trusted publisher must be configured for the package on npmjs.org
+(Repository → **one** workflow filename; npm allows a single trusted publisher
+per package, so publish that package from **one** workflow file). npm
+auto-generates provenance under trusted publishing, which is a **public-package**
+feature — verify it works for private packages, and keep `npm-token` set as the
+fallback until you've confirmed it.
 
 ```yaml
       - uses: knockaway/github-actions/publish-npm@v1
         with:
           working-directory: sdk
-          # no npm-token → OIDC trusted publishing
+          npm-token: ${{ secrets.NPM_TOKEN }} # fallback; OIDC used first
 ```
 
 ### Conventions & prerequisites
